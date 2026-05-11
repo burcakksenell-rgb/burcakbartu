@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import {
-  loadDB, saveDB, exportGuestsCSV, buildLink, buildWAMessage,
+  exportGuestsCSV, buildLink, buildWAMessage,
   getStats, generateToken, STATUS_CONFIG, TABLE_COLORS, DEFAULT_SETTINGS,
   type Guest, type RsvpStatus, type WeddingSettings, type AdminUser, type TableItem,
 } from '@/lib/data'
@@ -30,36 +30,82 @@ export default function AdminPage() {
   const [waGuest, setWaGuest] = useState<Guest | null>(null)
   const [form, setForm] = useState({ name: '', phone: '', status: 'pending' as RsvpStatus, partySize: '2', note: '' })
   const [toast, setToast] = useState({ show: false, msg: '' })
-  const [pwForm, setPwForm] = useState({ cur: '', nw: '', nw2: '' })
-  const [pwErr, setPwErr] = useState('')
   const [tableForm, setTableForm] = useState({ id: '', name: '', seats: '8', colorIdx: 0 })
   const [dragGuestId, setDragGuestId] = useState<string | null>(null)
   const [tableCounter, setTableCounter] = useState(6)
-
-  useEffect(() => {
-    const id = localStorage.getItem('weddingAdminId')
-    if (!id) { router.push('/login'); return }
-    const { guests, settings: s, admins: a, tables: t } = loadDB()
-    const found = a.find(x => x.id === id)
-    if (!found) { router.push('/login'); return }
-    setAdmin(found); setAllGuests(guests)
-    setSettings(s); setLocalSettings(s); setAdmins(a); setTables(t)
-    setTableCounter(t.length + 1)
-  }, [router])
-
-  const persist = useCallback((g: Guest[], s: WeddingSettings, a: AdminUser[], t: TableItem[]) => {
-    setAllGuests(g); setSettings(s); setAdmins(a); setTables(t)
-    saveDB(g, s, a, t)
-  }, [])
+  const [bootstrap, setBootstrap] = useState(true)
 
   const showToast = (msg: string) => {
     setToast({ show: true, msg })
     setTimeout(() => setToast({ show: false, msg: '' }), 2600)
   }
 
-  const logout = () => { localStorage.removeItem('weddingAdminId'); router.push('/login') }
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        const res = await fetch('/api/wedding/state', { credentials: 'include', cache: 'no-store' })
+        if (res.status === 401) {
+          router.push('/login')
+          return
+        }
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}))
+          showToast(typeof err.error === 'string' ? err.error : 'Veri yüklenemedi · .env / Supabase')
+          router.push('/login')
+          return
+        }
+        const json = await res.json()
+        if (cancelled) return
+        const me = (json.admins as AdminUser[]).find(x => x.id === json.currentAdminId)
+        if (!me) {
+          router.push('/login')
+          return
+        }
+        setAdmin(me)
+        setAllGuests(json.guests || [])
+        setSettings(json.settings)
+        setLocalSettings(json.settings)
+        setAdmins(json.admins || [])
+        setTables(json.tables || [])
+        setTableCounter((json.tables?.length || 0) + 1)
+      } catch {
+        showToast('Sunucuya bağlanılamadı · ortam değişkenleri ve Supabase key')
+        router.push('/login')
+      } finally {
+        if (!cancelled) setBootstrap(false)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [router])
 
-  if (!admin) return (
+  const persist = useCallback(async (g: Guest[], s: WeddingSettings, a: AdminUser[], t: TableItem[]) => {
+    setAllGuests(g); setSettings(s); setAdmins(a); setTables(t)
+    try {
+      const res = await fetch('/api/wedding/state', {
+        method: 'PUT',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ guests: g, settings: s, admins: a, tables: t }),
+      })
+      const errBody = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        showToast(typeof errBody.error === 'string' ? errBody.error : 'Supabase kaydı başarısız')
+        return false
+      }
+      return true
+    } catch {
+      showToast('Ağ hatası — kayıt yapılamadı')
+      return false
+    }
+  }, [showToast])
+
+  const logout = async () => {
+    await fetch('/api/admin/session', { method: 'DELETE', credentials: 'include' })
+    router.push('/login')
+  }
+
+  if (bootstrap || !admin) return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', color: 'var(--mt)' }}>
       Yükleniyor...
     </div>
@@ -79,59 +125,80 @@ export default function AdminPage() {
   // ── Guest CRUD ──
   const openAdd = () => { setEditId(null); setForm({ name: '', phone: '', status: 'pending', partySize: '2', note: '' }); setModal('add') }
   const openEdit = (g: Guest) => { setEditId(g.id); setForm({ name: g.name, phone: g.phone, status: g.status, partySize: String(g.partySize || 0), note: g.note || '' }); setModal('add') }
-  const saveGuest = () => {
+  const saveGuest = async () => {
     if (!form.name.trim() || !form.phone.trim()) { showToast('Ad ve telefon zorunlu!'); return }
     let updated: Guest[]
     if (editId) {
       updated = allGuests.map(g => g.id === editId ? { ...g, ...form, partySize: parseInt(form.partySize) || 0 } : g)
-      showToast(`${form.name} güncellendi ✓`)
     } else {
-      updated = [{ id: 'g' + Date.now(), name: form.name, phone: form.phone, status: form.status, partySize: parseInt(form.partySize) || 0, note: form.note, token: generateToken(), sentAt: null, respondedAt: null, ownerId: admin.id, tableId: null }, ...allGuests]
-      showToast(`${form.name} eklendi ✓`)
+      updated = [{ id: 'g' + Date.now(), name: form.name, phone: form.phone, status: form.status, partySize: parseInt(form.partySize) || 0, note: form.note, token: generateToken(), sentAt: null, respondedAt: null, ownerId: admin!.id, tableId: null }, ...allGuests]
     }
-    persist(updated, settings, admins, tables); setModal(null)
+    const ok = await persist(updated, settings, admins, tables)
+    if (!ok) return
+    if (editId) showToast(`${form.name} güncellendi ✓`)
+    else showToast(`${form.name} eklendi ✓`)
+    setModal(null)
   }
-  const deleteGuest = () => { persist(allGuests.filter(g => g.id !== deleteId), settings, admins, tables); setModal(null); showToast('Misafir silindi') }
-  const markSent = (id: string) => { persist(allGuests.map(g => g.id === id ? { ...g, sentAt: new Date().toISOString().slice(0, 10) } : g), settings, admins, tables); showToast('Gönderildi ✓') }
+  const deleteGuest = async () => {
+    const ok = await persist(allGuests.filter(g => g.id !== deleteId), settings, admins, tables)
+    if (!ok) return
+    setModal(null); showToast('Misafir silindi')
+  }
+  const markSent = async (id: string) => {
+    const ok = await persist(allGuests.map(g => g.id === id ? { ...g, sentAt: new Date().toISOString().slice(0, 10) } : g), settings, admins, tables)
+    if (!ok) return
+    showToast('Gönderildi ✓')
+  }
   const copy = (txt: string, msg = 'Kopyalandı!') => navigator.clipboard.writeText(txt).then(() => showToast(msg)).catch(() => showToast('Kopyalanamadı'))
+  const toWhatsAppPhone = (raw: string) => {
+    const digits = raw.replace(/\D/g, '')
+    if (!digits) return ''
+    if (digits.startsWith('90')) return digits
+    if (digits.startsWith('0')) return `90${digits.slice(1)}`
+    return digits
+  }
 
   // ── Tables ──
   const seatedAt = (tId: string) => allGuests.filter(g => g.tableId === tId).reduce((s, g) => s + (g.partySize || 0), 0)
   const initials = (name: string) => name.split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase()
   const guestColor = (g: Guest) => TABLE_COLORS[(g.id.charCodeAt(1) || 0) % TABLE_COLORS.length]
 
-  const onTableDrop = (e: React.DragEvent, tId: string) => {
+  const onTableDrop = async (e: React.DragEvent, tId: string) => {
     e.preventDefault()
     if (!dragGuestId) return
     const g = allGuests.find(x => x.id === dragGuestId)
     const t = tables.find(x => x.id === tId)
     if (!g || !t) return
     if (seatedAt(tId) + g.partySize > t.seats) { showToast(`${t.name} dolu! (${seatedAt(tId)}/${t.seats})`); return }
-    persist(allGuests.map(x => x.id === dragGuestId ? { ...x, tableId: tId } : x), settings, admins, tables)
-    setDragGuestId(null)
+    const ok = await persist(allGuests.map(x => x.id === dragGuestId ? { ...x, tableId: tId } : x), settings, admins, tables)
+    if (ok) setDragGuestId(null)
   }
-  const unassignGuest = (gId: string) => persist(allGuests.map(x => x.id === gId ? { ...x, tableId: null } : x), settings, admins, tables)
-  const addTable = () => {
+  const unassignGuest = async (gId: string) => {
+    await persist(allGuests.map(x => x.id === gId ? { ...x, tableId: null } : x), settings, admins, tables)
+  }
+  const addTable = async () => {
     const id = 't' + Date.now().toString(36)
     const newT: TableItem = { id, name: `Masa ${tableCounter}`, seats: 8, x: 40 + (tables.length % 3) * 180, y: 40 + Math.floor(tables.length / 3) * 200, colorIdx: tables.length % TABLE_COLORS.length }
-    persist(allGuests, settings, admins, [...tables, newT])
-    setTableCounter(c => c + 1)
+    const ok = await persist(allGuests, settings, admins, [...tables, newT])
+    if (ok) setTableCounter(c => c + 1)
   }
-  const removeTable = (id: string) => {
-    persist(allGuests.map(g => g.tableId === id ? { ...g, tableId: null } : g), settings, admins, tables.filter(t => t.id !== id))
+  const removeTable = async (id: string) => {
+    await persist(allGuests.map(g => g.tableId === id ? { ...g, tableId: null } : g), settings, admins, tables.filter(t => t.id !== id))
   }
   const openEditTable = (t: TableItem) => { setTableForm({ id: t.id, name: t.name, seats: String(t.seats), colorIdx: t.colorIdx }); setModal('editTable') }
-  const saveTableEdit = () => {
+  const saveTableEdit = async () => {
     const updated = tables.map(t => t.id === tableForm.id ? { ...t, name: tableForm.name, seats: parseInt(tableForm.seats) || 8, colorIdx: tableForm.colorIdx } : t)
-    persist(allGuests, settings, admins, updated); setModal(null)
+    const ok = await persist(allGuests, settings, admins, updated)
+    if (ok) setModal(null)
   }
-  const autoAssign = () => {
+  const autoAssign = async () => {
     let g = [...allGuests]
     confirmedGuests.filter(x => !x.tableId).forEach(guest => {
       const t = tables.find(t => seatedAt(t.id) + guest.partySize <= t.seats)
       if (t) g = g.map(x => x.id === guest.id ? { ...x, tableId: t.id } : x)
     })
-    persist(g, settings, admins, tables); showToast('Otomatik yerleştirme tamamlandı ✓')
+    const ok = await persist(g, settings, admins, tables)
+    if (ok) showToast('Otomatik yerleştirme tamamlandı ✓')
   }
   const exportSeating = () => {
     const lines = ['Masa Düzeni — Bartu & Burçak', '='.repeat(40), '']
@@ -144,15 +211,6 @@ export default function AdminPage() {
     const un = confirmedGuests.filter(g => !g.tableId)
     if (un.length) { lines.push('Yerleştirilmeyenler:'); un.forEach(g => lines.push(`  • ${g.name}`)) }
     const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([lines.join('\n')], { type: 'text/plain' })); a.download = 'masa-duzeni.txt'; a.click()
-  }
-
-  // ── Password ──
-  const savePw = () => {
-    if (pwForm.cur !== admin.password) { setPwErr('Mevcut şifre yanlış'); return }
-    if (pwForm.nw.length < 6) { setPwErr('En az 6 karakter'); return }
-    if (pwForm.nw !== pwForm.nw2) { setPwErr('Şifreler eşleşmiyor'); return }
-    persist(allGuests, settings, admins.map(a => a.id === admin.id ? { ...a, password: pwForm.nw } : a), tables)
-    setPwForm({ cur: '', nw: '', nw2: '' }); setPwErr(''); showToast('Şifre güncellendi ✓')
   }
 
   const Badge = ({ status }: { status: RsvpStatus }) => {
@@ -322,17 +380,24 @@ export default function AdminPage() {
             <div style={{ background: '#F0FBF4', border: '1px solid #B8E6C4', borderRadius: 9, padding: '13px 16px', marginBottom: 18 }}>
               <div style={{ fontWeight: 600, color: '#2A6B3A', fontSize: 12, marginBottom: 8 }}>Nasıl Çalışır?</div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-                {[['1️⃣', '"WA Aç" butonuna bas', 'Telefonunda WhatsApp açılır'], ['2️⃣', 'Mesaj hazır gelir', 'Ad ve link otomatik yazılı'], ['3️⃣', 'Gönder\'e bas', 'Senin numaranla gider'], ['4️⃣', 'Misafir linke tıklar', 'RSVP yapar, kaydedilir']].map(([n, t, d]) => (
+                {[['1️⃣', '"WA Aç" butonuna bas', 'Telefonunda WhatsApp açılır'], ['2️⃣', 'Mesaj hazır gelir', 'Sadece metin + kişisel link'], ['3️⃣', 'Gönder\'e bas', 'Senin numaranla gider'], ['4️⃣', 'Misafir linke tıklar', 'Davetiye ve RSVP açılır']].map(([n, t, d]) => (
                   <div key={n} style={{ display: 'flex', gap: 8 }}><span style={{ fontSize: 14 }}>{n}</span><div><div style={{ fontSize: 11, fontWeight: 600, color: '#2A6B3A' }}>{t}</div><div style={{ fontSize: 11, color: '#4A8A5A' }}>{d}</div></div></div>
                 ))}
               </div>
+              <p style={{ fontSize: 11, color: '#4A8A5A', marginTop: 10, marginBottom: 0 }}>Instagram veya başka uygulamalar için mesaj kutusundan <strong>Mesajı Kopyala</strong> deyip yapıştırabilirsin.</p>
             </div>
             <div className="s-card" style={{ marginBottom: 16 }}>
               <h3>Mesaj Şablonu</h3>
               <textarea rows={6} value={settings.waTemplate} onChange={e => setSettings(s => ({ ...s, waTemplate: e.target.value }))}
                 style={{ width: '100%', padding: 11, border: '1.5px solid var(--br)', borderRadius: 6, fontSize: 12, color: 'var(--dp)', background: 'var(--bl)', resize: 'vertical', lineHeight: 1.7, outline: 'none' }} />
-              <p style={{ fontSize: 10, color: 'var(--mt)', marginTop: 6 }}><strong>{'{AD}'}</strong> = misafir adı &nbsp;·&nbsp; <strong>{'{LINK}'}</strong> = kişisel RSVP linki</p>
-              <button className="abtn abtn-p" style={{ marginTop: 10 }} onClick={() => { saveDB(allGuests, settings, admins, tables); showToast('Şablon kaydedildi ✓') }}>Şablonu Kaydet</button>
+              <p style={{ fontSize: 10, color: 'var(--mt)', marginTop: 6 }}>
+                <strong>{'{AD}'}</strong> = misafir adı &nbsp;·&nbsp; <strong>{'{LINK}'}</strong> = kişisel davet/RSVP linki (WhatsApp, Instagram DM vb.) &nbsp;·&nbsp;
+                <strong>{'{name1}'}</strong> / <strong>{'{name2}'}</strong> = çift isimleri &nbsp;·&nbsp; <strong>{'{IMAGE}'}</strong> <em>isteğe bağlı</em>
+              </p>
+              <button className="abtn abtn-p" style={{ marginTop: 10 }} onClick={() => void (async () => {
+                const ok = await persist(allGuests, settings, admins, tables)
+                if (ok) showToast('Şablon kaydedildi ✓')
+              })()}>Şablonu Kaydet</button>
             </div>
             <div className="card">
               <table>
@@ -347,7 +412,7 @@ export default function AdminPage() {
                       <td style={{ whiteSpace: 'nowrap' }}>
                         <button className="abtn abtn-g" style={{ fontSize: 10, padding: '5px 9px', marginRight: 4 }} onClick={() => { setWaGuest(g); setModal('wa') }}>WA Aç</button>
                         <button className="abtn abtn-o" style={{ fontSize: 10, padding: '5px 8px', marginRight: 4 }} onClick={() => copy(buildLink(g.token, siteUrl), 'Link kopyalandı!')}>Link</button>
-                        {!g.sentAt && <button className="abtn abtn-o" style={{ fontSize: 10, padding: '5px 8px', color: '#3B6D11', borderColor: '#3B6D11' }} onClick={() => markSent(g.id)}>✓ Gönderildi</button>}
+                        {!g.sentAt && <button className="abtn abtn-o" style={{ fontSize: 10, padding: '5px 8px', color: '#3B6D11', borderColor: '#3B6D11' }} type="button" onClick={() => void markSent(g.id)}>✓ Gönderildi</button>}
                       </td>
                     </tr>
                   ))}
@@ -363,8 +428,8 @@ export default function AdminPage() {
             <div className="topbar">
               <div><h1>Masa Düzeni</h1><div className="sub">Katılan misafirleri masalara yerleştir · {placed}/{totalConfirmed} kişi yerleştirildi</div></div>
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                <button className="abtn abtn-o" onClick={addTable}>+ Masa Ekle</button>
-                <button className="abtn abtn-o" onClick={autoAssign}>⚡ Otomatik</button>
+                <button className="abtn abtn-o" type="button" onClick={() => void addTable()}>+ Masa Ekle</button>
+                <button className="abtn abtn-o" type="button" onClick={() => void autoAssign()}>⚡ Otomatik</button>
                 <button className="abtn abtn-o" onClick={exportSeating}>↓ Dışa Aktar</button>
               </div>
             </div>
@@ -491,17 +556,18 @@ export default function AdminPage() {
               </div>
             </div>
             <div className="s-card">
-              <h3>Şifremi Değiştir</h3>
-              <div className="s-grid">
-                <div className="mf"><label>Mevcut Şifre</label><input type="password" value={pwForm.cur} onChange={e => setPwForm(f => ({ ...f, cur: e.target.value }))} /></div>
-                <div />
-                <div className="mf"><label>Yeni Şifre</label><input type="password" value={pwForm.nw} onChange={e => setPwForm(f => ({ ...f, nw: e.target.value }))} /></div>
-                <div className="mf"><label>Yeni Şifre (Tekrar)</label><input type="password" value={pwForm.nw2} onChange={e => setPwForm(f => ({ ...f, nw2: e.target.value }))} /></div>
-              </div>
-              {pwErr && <p style={{ fontSize: 12, color: '#A32D2D', marginBottom: 8 }}>{pwErr}</p>}
-              <button className="abtn abtn-p" onClick={savePw}>Şifreyi Güncelle</button>
+              <h3>Admin girişi</h3>
+              <p style={{ fontSize: 12, color: 'var(--mt)', lineHeight: 1.65 }}>
+                Bartu ya da Burçak seçilir; ikisi için de <strong>aynı tek şifre</strong> geçerlidir (varsayılan <code style={{ fontSize: 11 }}>burcak2026</code>).
+                Canlı ortamda değiştirmek için Vercel’de <code style={{ fontSize: 11 }}>WEDDING_ADMIN_PASSWORD</code> tanımlayın ve yeniden deploy edin.
+              </p>
             </div>
-            <button className="abtn abtn-p" onClick={() => { saveDB(allGuests, localSettings, admins, tables); setSettings(localSettings); showToast('Ayarlar kaydedildi ✓') }}>
+            <button className="abtn abtn-p" onClick={() => void (async () => {
+              const ok = await persist(allGuests, localSettings, admins, tables)
+              if (ok) {
+                setSettings(localSettings); showToast('Ayarlar kaydedildi ✓')
+              }
+            })()}>
               Ayarları Kaydet
             </button>
           </div>
@@ -529,7 +595,7 @@ export default function AdminPage() {
             <div className="mf"><label>Not</label><textarea value={form.note} onChange={e => setForm(f => ({ ...f, note: e.target.value }))} rows={2} placeholder="İsteğe bağlı..." /></div>
             <div className="mact">
               <button className="abtn abtn-o" onClick={() => setModal(null)}>İptal</button>
-              <button className="abtn abtn-p" onClick={saveGuest}>Kaydet</button>
+              <button className="abtn abtn-p" type="button" onClick={() => void saveGuest()}>Kaydet</button>
             </div>
           </div>
         </div>
@@ -546,19 +612,21 @@ export default function AdminPage() {
             </div>
             <div className="wa-chat-bg">
               <div className="wa-bubble">
-                {buildWAMessage(waGuest, settings.waTemplate, siteUrl)}
+                {buildWAMessage(waGuest, settings.waTemplate, siteUrl, settings)}
                 <div className="wa-time">19:32 ✓✓</div>
               </div>
             </div>
             <div className="link-box"><div className="lb">RSVP Linki</div><div className="lu">{buildLink(waGuest.token, siteUrl)}</div></div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <button className="abtn abtn-g" style={{ width: '100%', padding: 13, fontSize: 13 }} onClick={() => {
-                const phone = waGuest.phone.replace(/\s/g, '').replace(/^0/, '+90')
-                window.open(`https://wa.me/${encodeURIComponent(phone)}?text=${encodeURIComponent(buildWAMessage(waGuest, settings.waTemplate, siteUrl))}`, '_blank')
-                markSent(waGuest.id); setModal(null)
-              }}>WhatsApp&apos;ta Aç ↗</button>
+              <button className="abtn abtn-g" style={{ width: '100%', padding: 13, fontSize: 13 }} onClick={() => void (async () => {
+                const phone = toWhatsAppPhone(waGuest.phone)
+                if (!phone) { showToast('Telefon numarası geçersiz'); return }
+                window.open(`https://wa.me/${phone}?text=${encodeURIComponent(buildWAMessage(waGuest, settings.waTemplate, siteUrl, settings))}`, '_blank')
+                await markSent(waGuest.id)
+                setModal(null)
+              })()}>WhatsApp&apos;ta Aç ↗</button>
               <div style={{ display: 'flex', gap: 8 }}>
-                <button className="abtn abtn-o" style={{ flex: 1 }} onClick={() => copy(buildWAMessage(waGuest, settings.waTemplate, siteUrl), 'Mesaj kopyalandı!')}>Mesajı Kopyala</button>
+                <button className="abtn abtn-o" style={{ flex: 1 }} onClick={() => copy(buildWAMessage(waGuest, settings.waTemplate, siteUrl, settings), 'Mesaj kopyalandı!')}>Mesajı Kopyala</button>
                 <button className="abtn abtn-o" style={{ flex: 1 }} onClick={() => copy(buildLink(waGuest.token, siteUrl), 'Link kopyalandı!')}>Linki Kopyala</button>
               </div>
               <button className="abtn abtn-o" style={{ width: '100%' }} onClick={() => setModal(null)}>Kapat</button>
@@ -575,7 +643,7 @@ export default function AdminPage() {
             <p style={{ fontSize: 13, color: 'var(--mt)', marginBottom: 20 }}>Bu misafiri silmek istediğinize emin misiniz?</p>
             <div className="mact">
               <button className="abtn abtn-o" onClick={() => setModal(null)}>İptal</button>
-              <button className="abtn abtn-r" onClick={deleteGuest}>Evet, Sil</button>
+              <button className="abtn abtn-r" type="button" onClick={() => void deleteGuest()}>Evet, Sil</button>
             </div>
           </div>
         </div>
@@ -599,7 +667,7 @@ export default function AdminPage() {
             </div>
             <div className="mact">
               <button className="abtn abtn-o" onClick={() => setModal(null)}>İptal</button>
-              <button className="abtn abtn-p" onClick={saveTableEdit}>Kaydet</button>
+              <button className="abtn abtn-p" type="button" onClick={() => void saveTableEdit()}>Kaydet</button>
             </div>
           </div>
         </div>

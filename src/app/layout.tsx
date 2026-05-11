@@ -1,7 +1,13 @@
 import type { Metadata } from 'next'
 import './globals.css'
 
+const metadataBase =
+  process.env.NEXT_PUBLIC_SITE_URL && /^https?:\/\//.test(process.env.NEXT_PUBLIC_SITE_URL)
+    ? new URL(process.env.NEXT_PUBLIC_SITE_URL)
+    : new URL('https://example.com')
+
 export const metadata: Metadata = {
+  metadataBase,
   title: 'Bartu & Burçak — 25 Temmuz 2026',
   description: 'River Garden, Paşamandıra / Beykoz',
   openGraph: {

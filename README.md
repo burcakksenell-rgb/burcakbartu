@@ -30,12 +30,9 @@
 
 ## Giriş Bilgileri
 
-| Kişi   | Şifre        |
-|--------|--------------|
-| Bartu  | `bartu2026`  |
-| Burçak | `burcak2026` |
+Bartu veya Burçak seçilse de **aynı tek şifre:** `burcak2026` (kod içi varsayılan).
 
-> Deploy sonrası Ayarlar > Şifremi Değiştir bölümünden güncelle!
+Üretimde farklı bir şifre isterseniz Vercel / `.env` içinde `WEDDING_ADMIN_PASSWORD` ile verin (`burcak2026` geçerliliğini yitirir).
 
 ---
 

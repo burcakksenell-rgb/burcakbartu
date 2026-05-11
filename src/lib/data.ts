@@ -44,6 +44,7 @@ export interface WeddingSettings {
   maxParty: number
   siteUrl: string
   waTemplate: string
+  inviteImagePath: string
 }
 
 // ─── DEFAULTS ────────────────────────────────────────────────
@@ -58,7 +59,8 @@ export const DEFAULT_SETTINGS: WeddingSettings = {
   venue: 'River Garden', address: 'Paşamandıra, Beykoz, İstanbul',
   mapUrl: 'https://maps.google.com/?q=River+Garden+Beykoz+Istanbul',
   deadline: '2026-06-20', maxParty: 5, siteUrl: '',
-  waTemplate: 'Merhaba {AD} 💌\n\nDüğün davetiyemiz hazır:\n{LINK}\n\nKatılım durumunu linkten bildirebilir misin?\n\nSevgiler,\nBartu & Burçak',
+  waTemplate: 'Merhaba {AD} 🤍\n\nBizi bu güzel günde yanınızda görmek isteriz. Davetiye ve katılımını tek linkten yönetebilirsin:\n\n{LINK}\n\nLinke tıkladığında her şey açılacak; yanıtın bize çok değerli.\n\nSevgiyle,\n{name1} & {name2}',
+  inviteImagePath: '/invitations/davetiye.jpg',
 }
 
 export const DEFAULT_TABLES: TableItem[] = [
@@ -102,41 +104,22 @@ export const TABLE_COLORS = [
   { bg: '#FAECE7', border: '#993C1D', text: '#993C1D' },
 ]
 
-// ─── STORAGE ─────────────────────────────────────────────────
-const DB_KEY = 'weddingDB_v4'
-
-export function loadDB() {
-  if (typeof window === 'undefined') {
-    return { guests: SAMPLE_GUESTS, settings: DEFAULT_SETTINGS, admins: DEFAULT_ADMINS, tables: DEFAULT_TABLES }
-  }
-  try {
-    const raw = localStorage.getItem(DB_KEY)
-    if (raw) {
-      const p = JSON.parse(raw)
-      return {
-        guests:   (p.guests  as Guest[])      || SAMPLE_GUESTS,
-        settings: { ...DEFAULT_SETTINGS,       ...(p.settings || {}) } as WeddingSettings,
-        admins:   (p.admins  as AdminUser[])   || DEFAULT_ADMINS,
-        tables:   (p.tables  as TableItem[])   || DEFAULT_TABLES,
-      }
-    }
-  } catch {}
-  return { guests: SAMPLE_GUESTS, settings: DEFAULT_SETTINGS, admins: DEFAULT_ADMINS, tables: DEFAULT_TABLES }
-}
-
-export function saveDB(guests: Guest[], settings: WeddingSettings, admins: AdminUser[], tables: TableItem[]) {
-  if (typeof window === 'undefined') return
-  try { localStorage.setItem(DB_KEY, JSON.stringify({ guests, settings, admins, tables })) } catch {}
-}
-
-// ─── HELPERS ─────────────────────────────────────────────────
 export function buildLink(token: string, siteUrl: string) {
   const base = siteUrl ? siteUrl.replace(/\/$/, '') : (typeof window !== 'undefined' ? window.location.origin : '')
   return `${base}/rsvp?g=${token}`
 }
 
-export function buildWAMessage(guest: Guest, template: string, siteUrl: string) {
-  return template.replace('{AD}', guest.name).replace('{LINK}', buildLink(guest.token, siteUrl))
+export function buildWAMessage(guest: Guest, template: string, siteUrl: string, couple?: Pick<WeddingSettings, 'name1' | 'name2'>) {
+  const base = siteUrl ? siteUrl.replace(/\/$/, '') : (typeof window !== 'undefined' ? window.location.origin : '')
+  const imageUrl = `${base}/invitations/davetiye.jpg`
+  const n1 = couple?.name1 ?? 'Bartu'
+  const n2 = couple?.name2 ?? 'Burçak'
+  return template
+    .replace(/\{AD\}/g, guest.name)
+    .replace(/\{LINK\}/g, buildLink(guest.token, siteUrl))
+    .replace(/\{IMAGE\}/g, imageUrl)
+    .replace(/\{name1\}/gi, n1)
+    .replace(/\{name2\}/gi, n2)
 }
 
 export function getStats(guests: Guest[]) {
