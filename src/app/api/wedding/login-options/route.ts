@@ -2,14 +2,10 @@ import { NextResponse } from 'next/server'
 import { readLoginOptions } from '@/lib/wedding-repository'
 
 export const runtime = 'nodejs'
+export const dynamic = 'force-dynamic'
 
-/** Şifresiz liste — hangi kullanıcı ile girileceği için. */
+/** Şifresiz liste — hangi kullanıcı ile girileceği için. DB hata verse bile bartu/burçak seçenekleri döner. */
 export async function GET() {
-  try {
-    const admins = await readLoginOptions()
-    return NextResponse.json({ admins })
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : 'Okuma hatası'
-    return NextResponse.json({ error: msg }, { status: 500 })
-  }
+  const { admins, dbOk } = await readLoginOptions()
+  return NextResponse.json({ admins, dbOk })
 }

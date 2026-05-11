@@ -2,14 +2,42 @@ import 'server-only'
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import type { AdminUser, Guest, TableItem, WeddingSettings } from '@/lib/data'
 
-function getClient(): SupabaseClient {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY
-  if (!url || !key) {
-    throw new Error('NEXT_PUBLIC_SUPABASE_URL ve SUPABASE_SERVICE_ROLE_KEY ortam değişkenleri gerekli')
-  }
-  return createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } })
+function normalizeEnvSecret(raw: string | undefined): string {
+  let s = typeof raw === 'string' ? raw.trim() : ''
+  if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) s = s.slice(1, -1).trim()
+  return s
 }
+
+/** Sunucuda PostgREST: yeni `sb_secret_…` veya legacy `service_role` JWT. */
+function resolveServerSupabaseKey(): string | undefined {
+  return (
+    normalizeEnvSecret(process.env.SUPABASE_SECRET_KEY) ||
+    normalizeEnvSecret(process.env.SUPABASE_SERVICE_ROLE_KEY)
+  )
+}
+
+function getEnvSupabase(): { url: string; key: string } | null {
+  const urlRaw = normalizeEnvSecret(process.env.NEXT_PUBLIC_SUPABASE_URL)
+  const keyRaw = resolveServerSupabaseKey()
+  if (!urlRaw || !keyRaw) return null
+  return { url: urlRaw, key: keyRaw }
+}
+
+function getClient(): SupabaseClient {
+  const env = getEnvSupabase()
+  if (!env) {
+    throw new Error(
+      'NEXT_PUBLIC_SUPABASE_URL ve sunucu anahtarı gerekli: SUPABASE_SECRET_KEY (sb_secret_…) veya legacy SUPABASE_SERVICE_ROLE_KEY.',
+    )
+  }
+  return createClient(env.url, env.key, { auth: { persistSession: false, autoRefreshToken: false } })
+}
+
+/** Giriş ekranı: DB erişilemese bile Bartu/Burçak seçimi gösterilir. */
+const FALLBACK_LOGIN_ADMINS: { id: string; displayName: string; color: string }[] = [
+  { id: 'bartu', displayName: 'Bartu', color: '#C5A97A' },
+  { id: 'burcak', displayName: 'Burçak', color: '#A8C5A0' },
+]
 
 function guestFromRow(row: {
   id: string
@@ -127,11 +155,30 @@ export type FullWeddingState = {
   tables: TableItem[]
 }
 
-export async function readLoginOptions() {
-  const supabase = getClient()
-  const { data, error } = await supabase.from('wedding_admins').select('id, display_name, color').order('id')
-  if (error) throw new Error(error.message)
-  return (data ?? []).map(r => ({ id: r.id, displayName: r.display_name, color: r.color }))
+export async function readLoginOptions(): Promise<{
+  admins: { id: string; displayName: string; color: string }[]
+  dbOk: boolean
+}> {
+  const env = getEnvSupabase()
+  if (!env) return { admins: [...FALLBACK_LOGIN_ADMINS], dbOk: false }
+
+  try {
+    const supabase = createClient(env.url, env.key, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    })
+    const { data, error } = await supabase.from('wedding_admins').select('id, display_name, color').order('id')
+    if (error) return { admins: [...FALLBACK_LOGIN_ADMINS], dbOk: false }
+
+    const rows = data ?? []
+    if (rows.length === 0) return { admins: [...FALLBACK_LOGIN_ADMINS], dbOk: true }
+
+    return {
+      admins: rows.map(r => ({ id: r.id, displayName: r.display_name, color: r.color })),
+      dbOk: true,
+    }
+  } catch {
+    return { admins: [...FALLBACK_LOGIN_ADMINS], dbOk: false }
+  }
 }
 
 export async function readFullState(): Promise<FullWeddingState> {

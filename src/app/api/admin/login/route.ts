@@ -13,7 +13,7 @@ export async function POST(req: Request) {
     const password = typeof body?.password === 'string' ? body.password : ''
     if (!id || !password) return NextResponse.json({ error: 'Eksik bilgi' }, { status: 400 })
 
-    const admins = await readLoginOptions()
+    const { admins } = await readLoginOptions()
     if (!admins.some(a => a.id === id)) {
       return NextResponse.json({ error: 'Şifre veya kullanıcı hatalı' }, { status: 401 })
     }

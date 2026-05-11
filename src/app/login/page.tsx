@@ -15,6 +15,7 @@ export default function LoginPage() {
   const [error, setError] = useState('')
   const [loadingList, setLoadingList] = useState(true)
   const [loggingIn, setLoggingIn] = useState(false)
+  const [dbOk, setDbOk] = useState(true)
 
   useEffect(() => {
     let cancelled = false
@@ -28,6 +29,7 @@ export default function LoginPage() {
           return
         }
         setAdmins(data.admins || [])
+        setDbOk(data.dbOk !== false)
       } catch {
         if (!cancelled) setError('Sunucuya bağlanılamadı · .env yapılandırmasını kontrol edin')
       } finally {
@@ -72,10 +74,18 @@ export default function LoginPage() {
     <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--iv)', padding: 20 }}>
       <div style={{ width: '100%', maxWidth: 360, background: 'var(--wh)', border: '1px solid var(--bd)', borderRadius: 14, padding: '36px 28px', textAlign: 'center' }}>
         <div style={{ fontFamily: 'Georgia,serif', fontSize: 24, color: 'var(--dp)', marginBottom: 4 }}>Düğün Admin</div>
-        <div style={{ fontSize: 12, color: 'var(--mt)', marginBottom: 32 }}>Bartu veya Burçak · Tek şifre: <strong>burcak2026</strong></div>
+        <div style={{ fontSize: 12, color: 'var(--mt)', marginBottom: 32 }}>Bartu / Burçak</div>
 
         {loadingList && <p style={{ fontSize: 12, color: 'var(--mt)' }}>Kullanıcılar yükleniyor...</p>}
         {!loadingList && admins.length === 0 && !error && <p style={{ fontSize: 12, color: 'var(--mt)' }}>Yönetici bulunamadı.</p>}
+        {!loadingList && !error && admins.length > 0 && dbOk === false && (
+          <p style={{ fontSize: 11, color: '#8b6914', marginBottom: 16, textAlign: 'left', lineHeight: 1.5 }}>
+            Veritabanına bağlanılamadı (genelde yanlış anahtar: “Invalid API key”). Gösterilen Bartu/Burçak seçimleri yerel; veri için `.env` içinde{' '}
+            <strong style={{ fontWeight: 600 }}>NEXT_PUBLIC_SUPABASE_URL</strong> ve sunucu anahtarı{' '}
+            <strong style={{ fontWeight: 600 }}>SUPABASE_SECRET_KEY</strong> (yeni <code style={{ fontSize: 10 }}>sb_secret_…</code>) veya legacy{' '}
+            <strong style={{ fontWeight: 600 }}>SUPABASE_SERVICE_ROLE_KEY</strong> kullanın.
+          </p>
+        )}
 
         <div style={{ marginBottom: 16, textAlign: 'left' }}>
           <label style={{ display: 'block', fontSize: 10, letterSpacing: '.1em', textTransform: 'uppercase' as const, color: 'var(--tp)', marginBottom: 8 }}>Kim giriş yapıyor?</label>
